@@ -1,0 +1,13 @@
+This is a fork/continuation of the zmbkpose Zimbra hot backup script by Rubens Alonso Filho.
+
+See:
+http://www.kyapanel.com/wiki/doku.php?id=zimbra:zmbkpose
+http://wiki.zimbra.com/wiki/HOT_Backup_and_HOT_Restore
+
+I set it up on github for different reasons:
+
+ * To make is easy for me to sync it to my different Zimbra instances
+ * To make collaboration easier. Contributions are welcome.
+ * The plan is to replace the incremental part Rubens started with
+   rsnapshot. (http://www.rsnapshot.org/). So this is a fork.
+
