@@ -1,0 +1,57 @@
+# This file is part of zmbkpose.
+
+#    zmbkopse is free software: you can redistribute it and/or modify
+#    it under the terms of the GNU General Public License as published by
+#    the Free Software Foundation, either version 3 of the License, or
+#    (at your option) any later version.
+
+#    zmbkopse is distributed in the hope that it will be useful,
+#    but WITHOUT ANY WARRANTY; without even the implied warranty of
+#    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+#    GNU General Public License for more details.
+
+#    You should have received a copy of the GNU General Public License
+#    along with zmbkpose.  If not, see <http://www.gnu.org/licenses/>
+
+# Configuration file for ZCS Opensource Edition Backup Tool
+# Lines begining with "#" will not be used
+# Values must have to be filled without spaces, quotes, or any kind of special 
+# characters
+
+# Privileged user that will run zmbkpose and write in the work directory
+BACKUPUSER=zimbra
+
+# Work directory where will be the backup sessions (all user data)
+# 
+# Keep the directory access strict to the backup user as long as it contains 
+# all user data.
+WORKDIR=/var/backups/zimbra
+
+# Must have be filled with an administrator account
+# Hint: If you have deleted admin, or missed its password, you can create a 
+# new admin directly from command line:
+# 
+# zmprov ca newadmin@exemplo.com password
+# zmprov ma newadmin@exemplo.com zimbraIsAdminAccount TRUE
+ADMINUSER=admin
+
+# Must be filled with ADMINUSER password
+ADMINPASS=yourpassword
+
+# Must be filled with ldap url from Zimbra-LDAP master host
+# Example: ldap://hostname:389
+LDAPMASTERSERVER=ldaps://yourldapmasterserver:636
+
+# Must be filled with zimbra_ldap_userdn key's value 
+# Hint: To get this value, at Zimbra's server, run:
+# zmlocalconfig zimbra_ldap_userdn
+LDAPZIMBRADN=uid=zimbra,cn=admins,cn=zimbra
+
+# Must be filled with zimbra_ldap_password key's value 
+# Hint: To get this value, at Zimbra's server, run:
+#       # zmlocalconfig -s zimbra_ldap_password
+LDAPZIMBRAPASS=y0urld7pp7sswd
+
+# Log file location. It must to have write permission to BACKUPUSER
+LOGFILE=/var/log/zmbackup.log
+
