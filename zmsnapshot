@@ -1,0 +1,329 @@
+#!/bin/bash
+#
+# zmbkpose
+#
+# Bash script to hot backup and hot restore Zimbra Collaboration Suite Opensource
+#
+# Copyright (C) 2007 Rubens Alonso Filho <rubens@harv.com.br>
+#
+# This program is free software; you can redistribute it and/or
+# modify it under the terms of version 2 of the GNU General Public
+# License as published by the Free Software Foundation.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program; if not, write to the Free Software
+# Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307
+# USA
+#
+# Version: 1.0.0
+
+
+show_help ()
+{
+    echo "Uses: 
+zmbkpose -f	
+   Starts a full backup of all accounts.
+zmbkpose -f mail
+   Starts a full backup of one account specified at command line.
+zmbkpose -l
+   Lists all backup sessions done.
+zmbkpose -r mail1,mail2,...,mailn session_name
+   Restore all contents (mail, contacts, appointments...) to any account from
+   session specifieds at command line. If session is not specified, all 
+   sessions will be restored from oldest to newest session. It may take longer.
+zmbkpose -restoreAccount mail1,mail2,...,mailn
+   Restore deleted accounts back to directory and all of its contents from 
+   oldest to newest session. It may take longer.
+zmbkpose -restoreAccount mail1,mail2,...,mailn --LDAPOnly session_name
+   Restore only account attributes, like password, class of service, etc; from
+   specified session.
+   HINT: It may be necessary to flush server's cache to apply imediatelly 
+   recovered attributes. So at Zimbra server, run: zmprov fc account account_name"
+
+exit 0
+}
+
+# Setup
+CURL=$(which curl)
+LDAPSEARCH=$(which ldapsearch)
+LDAPDELETE=$(which ldapdelete)
+LDAPADD=$(which ldapadd)
+
+SESSION=$(date  +%Y%m%d%H%M%S)
+
+session_start()
+{
+    echo "SESSION: $SESSION started at $(date)" >> $WORKDIR/sessions.txt
+    TEMPDIR=$(mktemp -d $WORKDIR/XXXX)
+    mkdir ${SESSION}
+}
+
+session_end()
+{
+    echo "SESSION: $SESSION ended at $(date)" >> $WORKDIR/sessions.txt
+#    rm -rf "$TEMPDIR"
+}
+
+all_accounts_backup ()
+{
+    ACCOUNTSLIST=$(mktemp)
+    $LDAPSEARCH -x -H $LDAPMASTERSERVER -D $LDAPZIMBRADN -w $LDAPZIMBRAPASS -b "" -LLL "(objectclass=zimbraAccount)" zimbraMailDeliveryAddress zimbraMailHost | grep ^zimbraMail | awk '{print $2}' > "$ACCOUNTSLIST"
+    
+    for MAIL in $(grep @ $ACCOUNTSLIST); do 
+       account_backup $MAIL
+    done
+}
+
+
+account_backup ()
+{
+    $LDAPSEARCH -x -H $LDAPMASTERSERVER -D $LDAPZIMBRADN -w $LDAPZIMBRAPASS -b "" -LLL "(zimbraMailDeliveryAddress=$MAIL)" > $TEMPDIR/$MAIL.ldiff
+    
+    # Not every mail account is always backed up. 
+    # Figure out which SESSION it was in the last time
+    PREVIOUSSESSION=$(grep $MAIL $WORKDIR/sessions.txt | grep -v ^WARN | tail -1 | awk -F: '{print $1}') 
+    echo $MAIL " found in " $PREVIOUSSESSION
+
+    MAILHOST=$(grep ^zimbraMailHost $TEMPDIR/$MAIL.ldiff | awk '{print $2}')
+    mkdir ${TEMPDIR}/$MAIL 
+    ls -ld ${TEMPDIR}/$MAIL
+
+    # Download and extract into temp
+    (umask 0; cd $TEMPDIR/$MAIL; $CURL -s -k -u $ADMINUSER:$ADMINPASS https://$MAILHOST:7071/home/$MAIL/?fmt=tgz | tar xfpz - ; cd - )
+    
+    # rsync from temp into session dir, taking the previous session into account
+    RSYNC="rsync -rlpcgoDi --delete --link-dest=../$PREVIOUSSESSION/ $TEMPDIR/ $SESSION"
+
+    $RSYNC
+
+    echo $SESSION:$MAIL:$(date +%m/%d/%y):$? >> $WORKDIR/sessions.txt
+}
+
+list_sessions ()
+{
+    grep SESSION: $WORKDIR/sessions.txt| grep started | awk '{print $2}'
+    exit 0
+}
+
+account_restore ()
+{
+    ACCOUNTBKPS=$(mktemp)
+    K=1
+    while true; do
+        MAIL=$(echo $1, | cut -d, -f$K)
+        if [ -z $MAIL ]; then
+            break
+        fi
+	grep $MAIL $WORKDIR/sessions.txt | grep -v ^WARN: > $ACCOUNTBKPS
+	if ! [ -s $ACCOUNTBKPS ]; then
+	    echo "$MAIL: No backups found. Impossible to restore"
+	    ((K = K+1))
+	else
+	    if [ -z $2 ]; then
+		echo "Not Implemented."
+			   	# Complete restore from oldest to newest
+		((K = K+1))
+	    else
+		ACCOUNTSESSION=$(grep $2 $WORKDIR/sessions.txt | tail -1 | awk '{print $2}')
+		if [ -z $ACCOUNTSESSION ]; then
+		    echo "$MAIL: $2 session doesnt exists. Impossible to proceed..."
+		    break
+		else
+		    ACCOUNTINSESSIO=$(grep $MAIL $ACCOUNTBKPS | grep $ACCOUNTSESSION)
+		    if [ -z $ACCOUNTINSESSIO ]; then
+			echo "$MAIL not found in session $ACCOUNTSESSION. Impossible to restore."
+        		((K = K+1))
+		    else
+			MAILHOST=$(grep ^zimbraMailHost $WORKDIR/$ACCOUNTSESSION/$MAIL.ldiff | awk '{print $2}')
+        		$CURL -k --data-binary @$WORKDIR/$ACCOUNTSESSION/$MAIL.tgz -u $ADMINUSER:$ADMINPASS https://$MAILHOST:7071/home/$MAIL/?fmt=tgz\&resolve=replace
+        		((K = K+1))
+			unset MAIL
+		    fi
+		fi
+	    fi
+	fi
+    done
+    exit 0
+}
+
+LDAP_content_restore ()
+{
+    ACCOUNTBKPS=$(mktemp)
+    K=1
+    while true; do
+        MAIL=$(echo $1, | cut -d, -f$K)
+        if [ -z $MAIL ]; then
+            break
+	fi
+	if [ -z $2 ]; then
+	    EXIST=$($LDAPSEARCH -x -H $LDAPMASTERSERVER -D $LDAPZIMBRADN -w $LDAPZIMBRAPASS -b "" -LLL "(&(objectclass=zimbraAccount)(zimbraMailDeliveryAddress=$MAIL))" uid)
+	    if ! [ -z "$EXIST" ]; then
+		echo "$MAIL account exists. Run zmbkpose -r $MAIL session_name."
+		((K = K+1))
+	    else
+		grep $MAIL $WORKDIR/sessions.txt | grep -e ^inc- -e ^full- > $ACCOUNTBKPS
+		if ! [ -s $ACCOUNTBKPS ]; then
+        	    echo "$MAIL: No backups found. Impossible to restore"
+                    ((K = K+1))
+		else
+		    echo "Sessions found
+$(cat $ACCOUNTBKPS | awk -F: '{print $1}')"
+      		    for ACCOUNTSESSION in $(cat $ACCOUNTBKPS | awk -F: '{print $1}'); do
+			echo "Restoring from $ACCOUNTSESSION"
+			MAILHOST=$(grep ^zimbraMailHost $WORKDIR/$ACCOUNTSESSION/$MAIL.ldiff | awk '{print $2}')
+			$LDAPDELETE -r -x -H $LDAPMASTERSERVER -D $LDAPZIMBRADN -c -w $LDAPZIMBRAPASS $(grep ^dn: $WORKDIR/$ACCOUNTSESSION/$MAIL.ldiff | awk '{print $2}') 2>/dev/null
+			$LDAPADD -x -H $LDAPMASTERSERVER -D $LDAPZIMBRADN -c -w $LDAPZIMBRAPASS -f $WORKDIR/$ACCOUNTSESSION/$MAIL.ldiff
+        		$CURL -k --data-binary @$WORKDIR/$ACCOUNTSESSION/$MAIL.tgz -u $ADMINUSER:$ADMINPASS https://$MAILHOST:7071/home/$MAIL/?fmt=tgz\resolv=replace
+			echo "$MAIL restored from $ACCOUNTSESSION"
+		    done
+		    ((K = K+1))
+        	    unset MAIL
+		fi
+	    fi
+	else
+	    ACCOUNTSESSION=$(grep $2 $WORKDIR/sessions.txt | grep $MAIL | tail -1 | awk -F: '{print $1}')
+	    if [ -z $ACCOUNTSESSION ]; then
+                echo "$MAIL: Session $2 doesnt exist or not found. Impossible to restore..."
+        	((K = K+1))
+            else
+		USERDN=$(grep ^dn: $WORKDIR/$ACCOUNTSESSION/$MAIL.ldiff | awk '{print $2}')
+		$LDAPDELETE -r -x -H $LDAPMASTERSERVER -D $LDAPZIMBRADN -c -w $LDAPZIMBRAPASS $USERDN
+		$LDAPADD -x -H $LDAPMASTERSERVER -D $LDAPZIMBRADN -c -w $LDAPZIMBRAPASS -f $WORKDIR/$ACCOUNTSESSION/$MAIL.ldiff
+		echo "User profile and settings restored from $ACCOUNTSESSION"
+        	((K = K+1))
+		unset MAIL
+	    fi
+        fi
+    done
+    exit 0
+}
+
+
+# Loading config file
+source /etc/zmbkpose/zmbkpose.conf
+
+if ! [ -z "$BACKUPUSER" ]; then
+    if [ "$(id -u)" != "$(id -u $BACKUPUSER)" ]; then
+	echo "You must be $BACKUPUSER to run this script"
+      	exit 0
+    fi
+else
+    echo "You must set BACKUPUSER"
+    exit 0
+fi
+
+if ! [ -z "$WORKDIR" ]; then
+    if ! [ -d "$WORKDIR" ]; then
+        echo "$WORKDIR doesnt exist"
+        exit 0
+    fi
+else
+    echo "You must set WORKDIR"
+    exit 0
+fi
+
+if [ -z "$ADMINUSER" ]; then
+    echo "You must set ADMINUSER"
+    exit 0
+fi
+
+if [ -z "$ADMINPASS" ]; then
+    echo "You must set ADMINPASS"
+    exit 0
+fi
+
+if [ -z "$LDAPMASTERSERVER" ]; then
+    echo "You must set LDAPMASTERSERVER"
+    exit 0
+fi
+
+if [ -z "$LDAPZIMBRADN" ]; then
+    echo "You must set LDAPZIMBRADN"
+    exit 0
+fi
+
+if [ -z "$LDAPZIMBRAPASS" ]; then
+    echo "You must set LDAPZIMBRAPASS"
+    exit 0
+fi
+
+if [ -z "$LOGFILE" ]; then
+    echo "You must set LOGFILE"
+    exit 0
+fi
+
+
+case "$1" in
+    "-f" )
+	if [ -z "$2" ]; then 
+	    session_start
+     	    all_accounts_backup
+	    session_end
+	elif [ -z "$3" ]; then 
+		session_start
+		MAIL=$2 
+		account_backup
+		session_end
+	else
+	    echo "Incorrect parameters $@. See help."
+	    show_help
+	fi
+	;;
+    "-l" )
+        if [ -z "$2" ]; then
+            list_sessions
+	else
+            echo "Incorrect parameters $@. See help."
+            show_help
+	fi
+	;;
+    "-r" )
+        if [ -z "$2" ]; then
+            echo "Incorrect parameters $@. See help."
+            show_help
+	else
+	    if [ -z "$4" ]; then
+		account_restore $2 $3
+	    else
+                echo "Incorrect parameters $@. See help."
+		show_help
+	    fi
+	fi
+	;;
+    "-restoreAccount" )
+        if [ -z "$2" ]; then
+            echo "Incorrect parameters $@. See help."
+            show_help
+	else
+	    if [ -z "$3" ]; then
+		LDAP_content_restore $2
+	    else
+		if [ "$3" = "--LDAPOnly" ]; then
+		    LDAP_content_restore $2 $4
+		else
+		    echo "Incorrect parameters $@. See help."
+		    show_help
+		fi
+	    fi	
+	fi
+	
+	;;
+# "--DeusMeAjude" )
+# if ! [ -z "$2" ]; then
+#         echo "Incorrect parameters $@. See help."
+#         show_help
+#	  else
+#		DeusMeAjude
+#		fi
+# ;;
+    * )
+	echo "Incorrect parameters $@. See help."
+	show_help
+	;;
+esac
+exit 0
