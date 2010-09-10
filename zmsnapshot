@@ -60,7 +60,7 @@ session_start()
 {
     echo "SESSION: $SESSION started at $(date)" >> $WORKDIR/sessions.txt
     TEMPDIR=$(mktemp -d $WORKDIR/XXXX)
-    mkdir ${SESSION}
+    mkdir ${WORKDIR}/${SESSION}
 }
 
 session_end()
@@ -87,7 +87,7 @@ account_backup ()
     
     MAILHOST=$(grep ^zimbraMailHost $TEMPDIR/$MAIL.ldiff | awk '{print $2}')
     if [ -z $MAILHOST ]; then
-	echo "Could not find Mailhost in LDAP data. Maybe the mail account doesnot exist"
+	echo "Could not find Mailhost in LDAP data. Maybe the mail account does not exist"
 	return 1
     fi
 
@@ -105,7 +105,7 @@ account_backup ()
     (cd $TEMPDIR/$MAIL; $CURL -s -k -u $ADMINUSER:$ADMINPASS https://$MAILHOST:7071/home/$MAIL/?fmt=tgz | tar xfpz - ; cd - )
     
     # rsync from temp into session dir, taking the previous session into account
-    rsync -rlpcgoDi --delete --link-dest=../$PREVIOUSSESSION/ $TEMPDIR/ $SESSION
+    rsync -rlpcgoDi --delete --link-dest=../$PREVIOUSSESSION/ $TEMPDIR/ $WORKDIR/$SESSION
     echo $SESSION:$MAIL:$(date +%m/%d/%y):$? >> $WORKDIR/sessions.txt
 }
 
